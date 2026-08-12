@@ -77,7 +77,7 @@ pub struct RzidClient {
 impl RzidClient {
     pub fn new(cfg: &Config) -> Result<Self, RZError> {
         if cfg.mode == RouterMode::Zone {
-            if cfg.zone_id.is_empty() || cfg.router_id.is_empty() {
+            if cfg.zone_id.is_none() || cfg.router_id.is_none() {
                 return Err(RZError::Config(
                     "zone mode requires zone_id and router_id".into(),
                 ));
@@ -99,8 +99,8 @@ impl RzidClient {
             client,
             base_url,
             mode: cfg.mode,
-            router_id: cfg.router_id.clone(),
-            zone_id: cfg.zone_id.clone(),
+            router_id: cfg.router_id.clone().unwrap_or_default(),
+            zone_id: cfg.zone_id.clone().unwrap_or_default(),
             local_versions: Arc::new(RwLock::new(HashMap::new())),
         })
     }

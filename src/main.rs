@@ -1,8 +1,6 @@
-use std::path::Path;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use clap::Parser;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing::Level;
@@ -19,19 +17,6 @@ use rzrouter::{
     tcp_server::TcpServer,
 };
 
-#[derive(Parser, Debug)]
-#[clap(
-    author,
-    version,
-    about = "RzRouter – edge/zone router",
-    long_about = None
-)]
-struct Args {
-    /// Path to the YAML configuration file
-    #[clap(short, long)]
-    config: Option<String>,
-}
-
 fn main() -> Result<(), RZError> {
     let subscriber = tracing_subscriber::fmt()
         .compact()
@@ -44,12 +29,7 @@ fn main() -> Result<(), RZError> {
     tracing::subscriber::set_global_default(subscriber)
         .expect("Failed to set global tracing subscriber");
 
-    let args = Args::parse();
-
-    let config_path = find_config_path(args.config.as_ref())
-        .ok_or_else(|| RZError::Config("No configuration file found".into()))?;
-
-    let config = Config::load(&config_path)?;
+    let config = Config::parse()?;
 
     let desired_workers = config.worker_threads;
     tracing::info!(
@@ -207,22 +187,4 @@ async fn run_heartbeat_task(
             }
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Config File Discovery
-// ---------------------------------------------------------------------------
-
-fn find_config_path(cli: Option<&String>) -> Option<String> {
-    if let Some(path) = cli {
-        if Path::new(path).exists() {
-            return Some(path.clone());
-        }
-    }
-    for candidate in ["rzrouter.yml", "/etc/rzrouter/rzrouter.yml"] {
-        if Path::new(candidate).exists() {
-            return Some(candidate.to_string());
-        }
-    }
-    None
 }

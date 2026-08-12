@@ -3,7 +3,7 @@ use serde::Deserialize;
 
 use crate::error::RZError;
 
-#[derive(Parser, Debug, Clone, Deserialize)]
+#[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 pub struct Config {
     /// Router mode: edge or zone
@@ -19,20 +19,20 @@ pub struct Config {
     pub tcp_port: u16,
 
     /// RzID address (e.g., "localhost:8080")
-    #[arg(long, default_value = "localhost:8080")]
+    #[arg(long, required = true)]
     pub rzid_addr: String,
 
     /// RzPoint address (e.g., "localhost:8081")
-    #[arg(long, default_value = "localhost:8081")]
+    #[arg(long, required = true)]
     pub rzpoint_addr: String,
 
-    /// Zone ID (required for zone mode)
-    #[arg(long, default_value = "")]
-    pub zone_id: String,
+    /// Zone ID (REQUIRED for zone mode)
+    #[arg(long)]
+    pub zone_id: Option<String>,
 
-    /// Router ID (required for zone mode)
-    #[arg(long, default_value = "")]
-    pub router_id: String,
+    /// Router ID (REQUIRED for zone mode)
+    #[arg(long)]
+    pub router_id: Option<String>,
 
     /// Maximum number of concurrent TCP connections
     #[arg(long, default_value = "10000")]
@@ -91,15 +91,33 @@ impl std::fmt::Display for RouterMode {
 }
 
 impl Config {
-    pub fn load(path: &str) -> Result<Self, RZError> {
-        let contents = std::fs::read_to_string(path)
-            .map_err(|e| RZError::Config(format!("Failed to read config file {path}: {e}")))?;
-        let config: Config = serde_yml::from_str(&contents)
-            .map_err(|e| RZError::Config(format!("Failed to parse config: {e}")))?;
+    pub fn parse() -> Result<Self, RZError> {
+        let config = <Self as Parser>::parse();
+
+        // Validation: zone mode requires zone_id and router_id
+        if config.mode == RouterMode::Zone {
+            if config.zone_id.is_none() || config.zone_id.as_ref().unwrap().is_empty() {
+                return Err(RZError::Config("zone_id is required for zone mode".into()));
+            }
+            if config.router_id.is_none() || config.router_id.as_ref().unwrap().is_empty() {
+                return Err(RZError::Config(
+                    "router_id is required for zone mode".into(),
+                ));
+            }
+        }
+
         Ok(config)
     }
 
     pub fn listen_addr(&self) -> String {
         format!("{}:{}", self.listen_host, self.tcp_port)
+    }
+
+    pub fn zone_id(&self) -> &str {
+        self.zone_id.as_deref().unwrap_or("")
+    }
+
+    pub fn router_id(&self) -> &str {
+        self.router_id.as_deref().unwrap_or("")
     }
 }

@@ -88,25 +88,6 @@ Translates component IDs (router IDs, bridge IDs) to actual hostnames. Decouples
 - **RzPoint** resolver must be running and reachable
 - For zone mode: `zone_id` and `router_id` must be registered with RzID
 
-### Configuration
-
-```yaml
-# rzrouter.yml
-mode: edge                    # edge or zone
-listen_host: "0.0.0.0"
-tcp_port: 9000
-rzid_addr: "rzid.internal:8080"
-rzpoint_addr: "rzpoint.internal:8081"
-zone_id: "eu"                 # Required for zone mode
-router_id: "router-1"         # Required for zone mode
-```
-
-### Starting
-
-```bash
-./rzrouter --config rzrouter.yml
-```
-
 
 ## Deployment
 
@@ -173,35 +154,3 @@ Routers expose:
 - **Metrics**: Prometheus metrics available at `/metrics` endpoint (if enabled)
 - **Health**: `/health` endpoint for readiness/liveness probes
 
-## Build
-
-```bash
-# Standard build
-cargo build --release
-
-# With metrics support
-cargo build --features metrics --release
-
-# Static binary (musl)
-cargo build --target x86_64-unknown-linux-musl --release
-```
-
-## Environment
-
-The router is designed for:
-
-- **Linux**: Primary platform (containers, VMs)
-- **High concurrency**: Thousands of concurrent TCP connections
-- **Low latency**: Sub-millisecond forwarding
-- **High throughput**: 10,000+ requests per second per instance
-
-## Support
-
-For issues with routing, start by checking:
-
-1. **RzID connectivity**: `curl http://rzid:8080/health`
-2. **RzPoint connectivity**: `curl http://rzpoint:8081/health`  
-3. **Component registration**: Verify the router is registered with RzID
-4. **Segment ownership**: Confirm the segment exists in RzID
-5. **Logs**: Check router logs for routing failures
-```
