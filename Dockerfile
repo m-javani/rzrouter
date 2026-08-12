@@ -9,6 +9,6 @@ COPY rzrouter /opt/rzrouter/rzrouter
 
 RUN chmod +x /opt/rzrouter/rzrouter
 
-EXPOSE 8777 3443
+EXPOSE 9000
 
 CMD ["/opt/rzrouter/rzrouter"]
