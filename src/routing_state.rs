@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+const CODEC_SEGMENT: &str = "__codecs__";
+
 /// Edge Router State
 ///
 /// segment → zone → [router IDs]
@@ -29,7 +31,18 @@ impl EdgeState {
 
     /// Hot path: segment → zone → routers
     pub fn lookup(&self, segment: &str) -> &[String] {
-        match self.segment_to_zone.get(segment) {
+        // Special handling for global requests - pick random segment
+        let lookup_segment = if segment == CODEC_SEGMENT {
+            if self.segment_to_zone.is_empty() {
+                return &[];
+            }
+            let idx = fastrand::usize(0..self.segment_to_zone.len());
+            self.segment_to_zone.keys().nth(idx).unwrap()
+        } else {
+            segment
+        };
+
+        match self.segment_to_zone.get(lookup_segment) {
             Some(zone) => self
                 .zone_to_routers
                 .get(zone)
@@ -68,7 +81,16 @@ impl ZoneState {
 
     /// Hot path: segment → shard → bridges
     pub fn lookup(&self, segment: &str) -> &[String] {
-        match self.segment_to_shard.get(segment) {
+        let lookup_segment = if segment == CODEC_SEGMENT {
+            if self.segment_to_shard.is_empty() {
+                return &[];
+            }
+            let idx = fastrand::usize(0..self.segment_to_shard.len());
+            self.segment_to_shard.keys().nth(idx).unwrap()
+        } else {
+            segment
+        };
+        match self.segment_to_shard.get(lookup_segment) {
             Some(shard) => self
                 .shard_to_bridges
                 .get(shard)
