@@ -20,10 +20,16 @@ impl RzPointResolver {
             .build()
             .map_err(|e| RZError::System(format!("rzpoint client: {e}")))?;
 
-        let base_url = if rzpoint_addr.starts_with("http") {
+        let base_url = if rzpoint_addr.starts_with("http://") {
             rzpoint_addr.trim_end_matches('/').to_string()
         } else {
-            format!("http://{}", rzpoint_addr.trim_end_matches('/'))
+            // Even if someone passes "https://", this will convert to "http://"
+            // Remove any protocol first, then add http://
+            let clean = rzpoint_addr
+                .trim_start_matches("http://")
+                .trim_start_matches("https://")
+                .trim_end_matches('/');
+            format!("http://{}", clean)
         };
 
         Ok(Self {

@@ -89,11 +89,12 @@ impl RzidClient {
             .build()
             .map_err(|e| RZError::System(format!("rzid client: {e}")))?;
 
-        let base_url = if cfg.rzid_addr.starts_with("http") {
-            cfg.rzid_addr.trim_end_matches('/').to_string()
-        } else {
-            format!("http://{}", cfg.rzid_addr.trim_end_matches('/'))
-        };
+        let base_url =
+            if cfg.rzid_addr.starts_with("http://") || cfg.rzid_addr.starts_with("https://") {
+                cfg.rzid_addr.trim_end_matches('/').to_string()
+            } else {
+                format!("http://{}", cfg.rzid_addr.trim_end_matches('/'))
+            };
 
         Ok(Self {
             client,
