@@ -7,14 +7,7 @@ use tracing::Level;
 use tracing_subscriber::fmt::time::UtcTime;
 
 use rzrouter::{
-    config::{Config, RouterMode},
-    error::RZError,
-    forwarder::Forwarder,
-    hop_manager::HopManager,
-    resolver::RzPointResolver,
-    routing_state::{EdgeState, RoutingSnapshot, ZoneState},
-    rzid::RzidClient,
-    tcp_server::TcpServer,
+    api::run_api_server, config::{Config, RouterMode}, error::RZError, forwarder::Forwarder, hop_manager::HopManager, metrics::Metrics, resolver::RzPointResolver, routing_state::{EdgeState, RoutingSnapshot, ZoneState}, rzid::RzidClient, tcp_server::TcpServer,
 };
 
 fn main() -> Result<(), RZError> {
@@ -116,7 +109,21 @@ async fn async_main(config: Config) -> Result<(), RZError> {
 
     tracing::info!(%listen_addr, mode = ?config.mode, "tcp server bound");
 
-    let server = TcpServer::new(config.clone(), cancel.clone(), forwarder);
+    // Create metrics (usually near the top of main, after parsing config)
+    let metrics = Arc::new(Metrics::new());
+
+    // ... later when creating the server
+    let server = TcpServer::new(config.clone(), cancel.clone(), forwarder, metrics.clone());
+
+    let api_cancel = cancel.clone();
+    let api_metrics = metrics.clone();
+    let api_addr = config.api_listen_addr();
+
+    tokio::spawn(async move {
+        if let Err(e) = run_api_server(api_addr, api_metrics, api_cancel).await {
+            tracing::error!("API server failed: {}", e);
+        }
+    });
 
     // --- Run --------------------------------------------------------------
     tokio::select! {

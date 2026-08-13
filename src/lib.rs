@@ -1,3 +1,4 @@
+pub mod api;
 pub mod config;
 pub mod connection;
 pub mod demux;
@@ -5,6 +6,7 @@ pub mod error;
 pub mod forwarder;
 pub mod hop;
 pub mod hop_manager;
+pub mod metrics;
 pub mod protocol;
 pub mod resolver;
 pub mod routing_state;
