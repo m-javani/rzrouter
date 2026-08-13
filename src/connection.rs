@@ -283,7 +283,7 @@ impl Connection {
 
         // Send the frame
         let bytes = frame.freeze();
-        if let Err(_) = self.inner.send_tx.send(bytes.clone()).await {
+        if let Err(_) = self.inner.send_tx.try_send(bytes.clone()) {
             // Send failed - connection is dead, clean up demux
             self.inner.demux.remove(new_clrid).await;
             return Err(RZError::ConnectionClosed);

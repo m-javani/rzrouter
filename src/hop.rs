@@ -183,7 +183,7 @@ impl Hop {
         }
 
         // Slow path: resolve
-        self.recover().await
+        self.ensure_address().await
     }
 
     /// Background maintenance loop.
@@ -269,7 +269,12 @@ impl Hop {
             };
 
             let to_create = target - live;
-            let mut new_conns: Vec<Arc<Connection>> = set.connections.clone();
+            let mut new_conns: Vec<Arc<Connection>> = set
+                .connections
+                .iter()
+                .filter(|c| !c.is_closed())
+                .cloned()
+                .collect();
             let mut conn_counter = 0u64;
 
             for _ in 0..to_create {
@@ -345,7 +350,7 @@ impl Hop {
     }
 
     /// Public method to trigger recovery (called when connection dies).
-    pub async fn recover(&self) -> Option<String> {
+    pub async fn ensure_address(&self) -> Option<String> {
         // Try to get address, resolve if needed
         if let Some(addr) = self.address.load().as_ref() {
             return Some(addr.to_string());
