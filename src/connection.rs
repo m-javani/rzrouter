@@ -91,6 +91,32 @@ impl Connection {
             "connection established"
         );
 
+        // ---------- Keepalive timer (we are the opener → we must send) ----------
+        let ka_inner = inner.clone();
+        let keepalive_interval = config.app_keepalive_interval(); // Duration
+        if !keepalive_interval.is_zero() {
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(keepalive_interval);
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                ticker.tick().await; // skip the immediate first tick
+
+                let ka_frame = Bytes::from(crate::protocol::build_keepalive_frame(0));
+
+                loop {
+                    ticker.tick().await;
+
+                    if ka_inner.closed.load(Ordering::Acquire) {
+                        break;
+                    }
+
+                    // Fire-and-forget through the existing write channel
+                    if ka_inner.send_tx.send(ka_frame.clone()).await.is_err() {
+                        break; // channel closed → connection dying
+                    }
+                }
+            });
+        }
+
         Ok(conn)
     }
 
