@@ -41,13 +41,10 @@ impl Forwarder {
         original_clrid: u32,
         is_write: bool,
     ) -> Result<Bytes, ForwardError> {
-        // Track whether we've successfully sent the request
         let mut request_sent = false;
-
         for attempt in 0..self.max_retries {
             // 1. Get routing snapshot
             let snapshot = self.routing.load();
-
             // 2. Get hop IDs for this segment
             let hop_ids = snapshot.lookup(&segment);
             if hop_ids.is_empty() {
@@ -56,28 +53,19 @@ impl Forwarder {
 
             // 3. Use original_clrid for round-robin distribution across requests
             let start_idx = (original_clrid as usize) % hop_ids.len();
-
             // 4. Try each hop starting from start_idx
             for i in 0..hop_ids.len() {
                 let idx = (start_idx + i) % hop_ids.len();
                 let hop_id = &hop_ids[idx];
 
-                // 5. Get the Hop
                 let hop = match self.hops.get(hop_id) {
                     Some(h) => h,
                     None => continue,
                 };
 
-                // 6. Get a connection
                 let conn = match hop.next_connection() {
                     Some(c) => c,
                     None => {
-                        // No live connection - trigger background resolution
-                        debug!(
-                            segment = %segment,
-                            hop = %hop_id,
-                            "no live connection, attempting resolution in background"
-                        );
                         let hop_clone = hop.clone();
                         tokio::spawn(async move {
                             let _ = hop_clone.resolve_address().await;
@@ -90,11 +78,17 @@ impl Forwarder {
                     continue;
                 }
 
-                // 7. Generate new correlation ID
                 let new_clrid = conn.next_corr_id();
 
-                // 8. Modify the frame in-place
-                if frame.len() < clrid_offset + 4 {
+                // === BOUNDS CHECK / SAFE CLRID UPDATE (new) ===
+                if clrid_offset + 4 > frame.len() {
+                    debug!(
+                        segment = %segment,
+                        hop = %hop_id,
+                        offset = clrid_offset,
+                        frame_len = frame.len(),
+                        "invalid CLRID offset"
+                    );
                     return Err(ForwardError::Internal("frame too short for CLRID".into()));
                 }
 
@@ -127,57 +121,47 @@ impl Forwarder {
                             return Ok(response);
                         }
                     }
-                    Err(e) => {
-                        match &e {
-                            RZError::ConnectionClosed => {
-                                // Request was never sent (connection died before send)
-                                // Safe to retry
+                    Err(e) => match &e {
+                        RZError::ConnectionClosed => {
+                            debug!(
+                                segment = %segment,
+                                hop = %hop_id,
+                                attempt = attempt,
+                                "connection closed before send, retry safe"
+                            );
+                            conn.close();
+                            continue;
+                        }
+                        _ => {
+                            request_sent = true;
+                            if is_write {
                                 debug!(
                                     segment = %segment,
                                     hop = %hop_id,
-                                    attempt = attempt,
-                                    "connection closed before send, retry safe"
+                                    error = %e,
+                                    "write request failed after send, NOT retrying"
+                                );
+                                return Err(ForwardError::Timeout);
+                            } else {
+                                debug!(
+                                    segment = %segment,
+                                    hop = %hop_id,
+                                    error = %e,
+                                    "read request failed after send, retry safe"
                                 );
                                 conn.close();
                                 continue;
                             }
-                            _ => {
-                                // Request was sent but we got an error
-                                // For writes: DO NOT RETRY (could duplicate)
-                                // For reads: SAFE TO RETRY (idempotent)
-                                request_sent = true;
-
-                                if is_write {
-                                    debug!(
-                                        segment = %segment,
-                                        hop = %hop_id,
-                                        error = %e,
-                                        "write request failed after send, NOT retrying"
-                                    );
-                                    return Err(ForwardError::Timeout);
-                                } else {
-                                    debug!(
-                                        segment = %segment,
-                                        hop = %hop_id,
-                                        error = %e,
-                                        "read request failed after send, retry safe"
-                                    );
-                                    conn.close();
-                                    continue;
-                                }
-                            }
                         }
-                    }
+                    },
                 }
             }
 
             // If we get here, no hop worked on this attempt
             if is_write && request_sent {
-                // Write was sent but we got no response - don't retry
                 return Err(ForwardError::Timeout);
             }
 
-            // Check if all hops are unreachable
             if attempt == self.max_retries - 1 {
                 return Err(ForwardError::NetworkError);
             }
@@ -189,8 +173,6 @@ impl Forwarder {
             );
             tokio::time::sleep(Duration::from_millis(50 * (attempt + 1) as u64)).await;
         }
-
-        // All retries exhausted
         Err(ForwardError::NetworkError)
     }
 
