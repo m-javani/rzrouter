@@ -9,6 +9,8 @@ use crate::error::{ForwardError, RZError};
 use crate::hop_manager::HopManager;
 use crate::routing_state::RoutingSnapshot;
 
+const GETSEGMENTS: &str = "GETSEGMENTS";
+
 /// The forwarder handles the hot path: route → hop → connection → send → response.
 pub struct Forwarder {
     routing: Arc<ArcSwap<RoutingSnapshot>>,
@@ -41,6 +43,12 @@ impl Forwarder {
         original_clrid: u32,
         is_write: bool,
     ) -> Result<Bytes, ForwardError> {
+        if segment == GETSEGMENTS {
+            let snapshot = self.routing.load();
+            let response = snapshot.serialize_segments(original_clrid);
+            return Ok(Bytes::from(response));
+        }
+
         let mut request_sent = false;
         for attempt in 0..self.max_retries {
             // 1. Get routing snapshot

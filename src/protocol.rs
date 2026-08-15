@@ -154,3 +154,53 @@ pub fn find_next_router_magic(buf: &[u8], from: usize) -> Option<usize> {
         .position(|&b| b == ROUTER_MAGIC)
         .map(|p| from + p)
 }
+
+/// Serializes a list of segments into the protocol format with counts set to 0
+pub fn serialize_get_segments<'a, I>(segments: I, clrid: u32) -> Vec<u8>
+where
+    I: Iterator<Item = &'a String>,
+{
+    let mut buf = Vec::new();
+
+    // Header
+    buf.push(0xFF);
+    buf.extend_from_slice(&clrid.to_le_bytes());
+    let payload_len_pos = buf.len();
+    buf.extend_from_slice(&0u32.to_le_bytes());
+
+    // Payload start
+    let payload_start = buf.len();
+    buf.push(7);
+    buf.extend_from_slice(b"SUCCESS");
+    let fields_pos = buf.len();
+    buf.extend_from_slice(&0u16.to_le_bytes());
+
+    let mut total_fields: u16 = 0;
+
+    for key in segments {
+        // Key field
+        buf.extend_from_slice(&(total_fields + 1).to_le_bytes());
+        buf.push(0x01);
+        buf.extend_from_slice(&(key.len() as u32).to_le_bytes());
+        buf.extend_from_slice(key.as_bytes());
+        total_fields += 1;
+
+        // Value field - count = 0
+        buf.extend_from_slice(&(total_fields + 1).to_le_bytes());
+        buf.push(0x03);
+        buf.extend_from_slice(&4u32.to_le_bytes());
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        total_fields += 1;
+    }
+
+    // Patch field count
+    let fields_count_bytes = total_fields.to_le_bytes();
+    buf[fields_pos..fields_pos + 2].copy_from_slice(&fields_count_bytes);
+
+    // Patch payload length
+    let payload_len = (buf.len() - payload_start) as u32;
+    let payload_len_bytes = payload_len.to_le_bytes();
+    buf[payload_len_pos..payload_len_pos + 4].copy_from_slice(&payload_len_bytes);
+
+    buf
+}

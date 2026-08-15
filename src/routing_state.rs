@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::protocol::serialize_get_segments;
+
 const CODEC_SEGMENT: &str = "__codecs__";
 
 /// Edge Router State
@@ -119,6 +121,15 @@ impl RoutingSnapshot {
             RoutingSnapshot::Edge(state) => state.lookup(segment),
             RoutingSnapshot::Zone(state) => state.lookup(segment),
         }
+    }
+
+    /// Serialize all segments with count 0 using the protocol format
+    pub fn serialize_segments(&self, clrid: u32) -> Vec<u8> {
+        let segments = match self {
+            RoutingSnapshot::Edge(state) => state.segment_to_zone.keys(),
+            RoutingSnapshot::Zone(state) => state.segment_to_shard.keys(),
+        };
+        serialize_get_segments(segments, clrid)
     }
 
     pub fn is_edge(&self) -> bool {
