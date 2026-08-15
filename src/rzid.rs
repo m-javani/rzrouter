@@ -303,9 +303,21 @@ impl RzidClient {
         manifest
             .versions
             .iter()
+            .filter(|(key, _)| match self.mode {
+                RouterMode::Edge => {
+                    key.starts_with("zones/")
+                        && (key.ends_with("/routers") || key.ends_with("/segments"))
+                }
+
+                RouterMode::Zone => {
+                    let own_shards_key = format!("zones/{}/shards", self.zone_id);
+
+                    *key == &own_shards_key
+                }
+            })
             .filter_map(|(key, version)| {
                 if local.get(key) != Some(version) {
-                    Some(key.clone())
+                    Some((*key).clone())
                 } else {
                     None
                 }
@@ -317,10 +329,6 @@ impl RzidClient {
         let mut local = self.local_versions.write().await;
         local.insert(key.to_string(), version);
     }
-
-    // -----------------------------------------------------------------------
-    // Edge Sync
-    // -----------------------------------------------------------------------
 
     // ---------------------------------------------------------------------------
     // Edge Sync
@@ -462,7 +470,7 @@ impl RzidClient {
     async fn sync_zone_state(
         &self,
         current: Option<&RoutingSnapshot>,
-        _manifest: &VersionManifest,
+        manifest: &VersionManifest,
         changed: &HashSet<String>,
         hop_manager: &HopManager,
     ) -> Result<Option<RoutingSnapshot>, RZError> {
@@ -494,12 +502,9 @@ impl RzidClient {
                         new_shard_to_bridges.insert(shard_id, hop_ids);
                     }
 
-                    // The entire response is authoritative.
-                    //
-                    // This removes shards that disappeared from RzID.
                     state.shard_to_bridges = new_shard_to_bridges;
 
-                    // Any segment pointing at a deleted shard is invalid.
+                    // Remove segments belonging to shards that disappeared.
                     let valid_shards: HashSet<String> =
                         state.shard_to_bridges.keys().cloned().collect();
 
@@ -526,26 +531,30 @@ impl RzidClient {
         }
 
         // -----------------------------------------------------------------------
-        // The current shard topology is authoritative for which shards belong
-        // to this zone.
+        // Only fetch segment versions for shards that belong to OUR zone.
         // -----------------------------------------------------------------------
 
         let local_shards: Vec<String> = state.shard_to_bridges.keys().cloned().collect();
 
-        // -----------------------------------------------------------------------
-        // Synchronize changed segment mappings for local shards.
-        // -----------------------------------------------------------------------
-
         for shard_id in local_shards {
             let segments_key = format!("shards/{}/segments", shard_id);
 
-            if !changed.contains(&segments_key) {
+            let Some(manifest_version) = manifest.versions.get(&segments_key) else {
+                continue;
+            };
+
+            let local_version = {
+                let local = self.local_versions.read().await;
+                local.get(&segments_key).copied()
+            };
+
+            if local_version == Some(*manifest_version) {
                 continue;
             }
 
             match self.fetch_shard_segments(&shard_id).await {
                 Ok((version, zone, segments)) => {
-                    // A shard must never be installed into the wrong zone.
+                    // Never install a shard returned by RzID into the wrong zone.
                     if zone != self.zone_id {
                         warn!(
                             shard = %shard_id,
@@ -557,9 +566,6 @@ impl RzidClient {
                         continue;
                     }
 
-                    // RzID response is authoritative for this shard.
-                    //
-                    // This removes deleted segments and handles reassignment.
                     state.replace_shard_segments(&shard_id, segments);
 
                     self.update_local_version(&segments_key, version).await;
@@ -583,8 +589,6 @@ impl RzidClient {
 
         // -----------------------------------------------------------------------
         // Final consistency pass.
-        //
-        // A segment is routable only if its shard exists and has bridge state.
         // -----------------------------------------------------------------------
 
         let valid_shards: HashSet<String> = state.shard_to_bridges.keys().cloned().collect();
