@@ -204,3 +204,41 @@ where
 
     buf
 }
+
+pub fn serialize_codecs(clrid: u32, codec_bytes: &[u8]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(32 + codec_bytes.len());
+
+    /* ---------- header ---------- */
+    buf.push(0xFF); // magic
+    buf.extend_from_slice(&clrid.to_le_bytes());
+    let payload_len_pos = buf.len();
+    buf.extend_from_slice(&0u32.to_le_bytes()); // placeholder
+
+    /* ---------- payload ---------- */
+    let payload_start = buf.len();
+
+    buf.push(7);
+    buf.extend_from_slice(b"SUCCESS");
+
+    let field_cnt_pos = buf.len();
+    buf.extend_from_slice(&0u16.to_le_bytes()); // field-count placeholder
+
+    /* ---------- single field #1 ---------- */
+    // field-id 1
+    buf.extend_from_slice(&1u16.to_le_bytes());
+    // type 0x09 → "raw bytes / YAML"
+    buf.push(0x09);
+    // length
+    buf.extend_from_slice(&(codec_bytes.len() as u32).to_le_bytes());
+    // value
+    buf.extend_from_slice(codec_bytes);
+
+    /* ---------- back-patch counts ---------- */
+    let field_count: u16 = 1;
+    buf[field_cnt_pos..field_cnt_pos + 2].copy_from_slice(&field_count.to_le_bytes());
+
+    let payload_len = (buf.len() - payload_start) as u32;
+    buf[payload_len_pos..payload_len_pos + 4].copy_from_slice(&payload_len.to_le_bytes());
+
+    buf
+}

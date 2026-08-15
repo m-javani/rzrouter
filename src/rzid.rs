@@ -15,6 +15,12 @@ use crate::routing_state::{EdgeState, RoutingSnapshot, ZoneState};
 // ---------------------------------------------------------------------------
 // Wire types (matches RzID API)
 // ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct CodecsResponse {
+    pub rate_features: Vec<String>,
+    pub hash: u64,
+}
 #[derive(Debug, serde::Serialize)]
 struct RegisterRequest {
     kind: String,
@@ -245,9 +251,9 @@ impl RzidClient {
         Ok((resp.version, resp.zone, resp.segments))
     }
 
-    // -----------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
     // Full Sync
-    // -----------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
 
     pub async fn sync_routing_state(
         &self,
@@ -257,6 +263,7 @@ impl RzidClient {
         let manifest = self.fetch_version_manifest().await?;
 
         let changed_keys = self.detect_changes(&manifest).await;
+
         if changed_keys.is_empty() {
             debug!("no routing changes detected");
             return Ok(None);
@@ -269,13 +276,15 @@ impl RzidClient {
                 self.sync_edge_state(current_snapshot, &manifest, &changed_keys, hop_manager)
                     .await
             }
+
             RouterMode::Zone => {
                 self.sync_zone_state(current_snapshot, &manifest, &changed_keys, hop_manager)
                     .await
             }
         };
 
-        // Retire hops that are no longer in the routing table
+        // Retire hops that are no longer referenced by the newly constructed
+        // routing snapshot.
         if let Ok(Some(ref snapshot)) = result {
             let active_ids = snapshot.get_all_hop_ids();
             hop_manager.retire_unused(&active_ids);
@@ -284,21 +293,24 @@ impl RzidClient {
         result
     }
 
-    // -----------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
     // Change Detection
-    // -----------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
 
     async fn detect_changes(&self, manifest: &VersionManifest) -> HashSet<String> {
-        let mut changed = HashSet::new();
         let local = self.local_versions.read().await;
 
-        for (key, version) in &manifest.versions {
-            if local.get(key) != Some(version) {
-                changed.insert(key.clone());
-            }
-        }
-
-        changed
+        manifest
+            .versions
+            .iter()
+            .filter_map(|(key, version)| {
+                if local.get(key) != Some(version) {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     async fn update_local_version(&self, key: &str, version: u64) {
@@ -310,6 +322,10 @@ impl RzidClient {
     // Edge Sync
     // -----------------------------------------------------------------------
 
+    // ---------------------------------------------------------------------------
+    // Edge Sync
+    // ---------------------------------------------------------------------------
+
     async fn sync_edge_state(
         &self,
         current: Option<&RoutingSnapshot>,
@@ -318,22 +334,43 @@ impl RzidClient {
         hop_manager: &HopManager,
     ) -> Result<Option<RoutingSnapshot>, RZError> {
         let mut state = match current {
-            Some(RoutingSnapshot::Edge(s)) => s.clone(),
+            Some(RoutingSnapshot::Edge(existing)) => existing.clone(),
             _ => EdgeState::new(),
         };
 
-        // Extract zone names from manifest keys
-        let zone_keys: HashSet<String> = manifest
+        // -----------------------------------------------------------------------
+        // Determine which zones currently exist.
+        //
+        // The manifest is authoritative for the existence of zone resources.
+        // -----------------------------------------------------------------------
+
+        let valid_zones: HashSet<String> = manifest
             .versions
             .keys()
-            .filter(|k| k.starts_with("zones/"))
-            .filter_map(|k| k.split('/').nth(1))
-            .map(|s| s.to_string())
+            .filter_map(|key| {
+                let mut parts = key.split('/');
+
+                match (parts.next(), parts.next()) {
+                    (Some("zones"), Some(zone_id)) => Some(zone_id.to_string()),
+                    _ => None,
+                }
+            })
             .collect();
 
-        for zone_id in &zone_keys {
-            // Check if routers changed
+        // Remove zones that disappeared from RzID.
+        state.retain_valid_zones(&valid_zones);
+
+        // -----------------------------------------------------------------------
+        // Synchronize changed zones.
+        // -----------------------------------------------------------------------
+
+        for zone_id in &valid_zones {
+            // ---------------------------------------------------------------
+            // Zone routers
+            // ---------------------------------------------------------------
+
             let routers_key = format!("zones/{}/routers", zone_id);
+
             if changed.contains(&routers_key) {
                 match self.fetch_zone_routers(zone_id).await {
                     Ok((version, routers)) => {
@@ -344,36 +381,72 @@ impl RzidClient {
                                 id
                             })
                             .collect();
+
+                        // RzID response is authoritative for this zone.
                         state.set_zone_routers(zone_id, hop_ids);
+
                         self.update_local_version(&routers_key, version).await;
-                        debug!(zone = %zone_id, "updated zone routers");
+
+                        debug!(
+                            zone = %zone_id,
+                            version,
+                            "updated zone routers"
+                        );
                     }
+
                     Err(e) => {
-                        warn!(%zone_id, error=%e, "failed to fetch zone routers, keeping old");
+                        warn!(
+                            zone = %zone_id,
+                            error = %e,
+                            "failed to fetch zone routers, keeping old state"
+                        );
                     }
                 }
             }
 
-            // Check if segments changed
+            // ---------------------------------------------------------------
+            // Zone segments
+            // ---------------------------------------------------------------
+
             let segments_key = format!("zones/{}/segments", zone_id);
+
             if changed.contains(&segments_key) {
                 match self.fetch_zone_segments(zone_id).await {
                     Ok((version, segments)) => {
-                        for seg in segments {
-                            state.set_segment_zone(seg, zone_id.clone());
-                        }
+                        // RzID response is authoritative for this zone.
+                        state.replace_zone_segments(zone_id, segments);
+
                         self.update_local_version(&segments_key, version).await;
-                        debug!(zone = %zone_id, "updated zone segments");
+
+                        debug!(
+                            zone = %zone_id,
+                            version,
+                            "updated zone segments"
+                        );
                     }
+
                     Err(e) => {
-                        warn!(%zone_id, error=%e, "failed to fetch zone segments, keeping old");
+                        warn!(
+                            zone = %zone_id,
+                            error = %e,
+                            "failed to fetch zone segments, keeping old state"
+                        );
                     }
                 }
             }
         }
 
-        // Remove segments for zones that no longer exist
-        state.retain_valid_zones(&zone_keys);
+        // -----------------------------------------------------------------------
+        // Final consistency check.
+        //
+        // No segment may point at a zone that does not have router state.
+        // -----------------------------------------------------------------------
+
+        let zones_with_routers: HashSet<String> = state.zone_to_routers.keys().cloned().collect();
+
+        state
+            .segment_to_zone
+            .retain(|_, zone| zones_with_routers.contains(zone));
 
         if state.is_empty() {
             return Err(RZError::NoRoute("empty edge state after sync".into()));
@@ -382,27 +455,33 @@ impl RzidClient {
         Ok(Some(RoutingSnapshot::Edge(state)))
     }
 
-    // -----------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
     // Zone Sync
-    // -----------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
 
     async fn sync_zone_state(
         &self,
         current: Option<&RoutingSnapshot>,
-        manifest: &VersionManifest,
+        _manifest: &VersionManifest,
         changed: &HashSet<String>,
         hop_manager: &HopManager,
     ) -> Result<Option<RoutingSnapshot>, RZError> {
         let mut state = match current {
-            Some(RoutingSnapshot::Zone(s)) => s.clone(),
+            Some(RoutingSnapshot::Zone(existing)) => existing.clone(),
             _ => ZoneState::new(),
         };
 
-        // Get shard topology for our zone
+        // -----------------------------------------------------------------------
+        // Fetch authoritative shard topology for our zone.
+        // -----------------------------------------------------------------------
+
         let shards_key = format!("zones/{}/shards", self.zone_id);
+
         if changed.contains(&shards_key) || state.shard_to_bridges.is_empty() {
             match self.fetch_zone_shards(&self.zone_id).await {
                 Ok((version, shards)) => {
+                    let mut new_shard_to_bridges = HashMap::with_capacity(shards.len());
+
                     for (shard_id, bridges) in shards {
                         let hop_ids: Vec<String> = bridges
                             .into_iter()
@@ -411,53 +490,129 @@ impl RzidClient {
                                 id
                             })
                             .collect();
-                        state.set_shard_bridges(&shard_id, hop_ids);
+
+                        new_shard_to_bridges.insert(shard_id, hop_ids);
                     }
+
+                    // The entire response is authoritative.
+                    //
+                    // This removes shards that disappeared from RzID.
+                    state.shard_to_bridges = new_shard_to_bridges;
+
+                    // Any segment pointing at a deleted shard is invalid.
+                    let valid_shards: HashSet<String> =
+                        state.shard_to_bridges.keys().cloned().collect();
+
+                    state.retain_valid_shards(&valid_shards);
+
                     self.update_local_version(&shards_key, version).await;
-                    debug!(zone = %self.zone_id, "updated zone shards");
+
+                    debug!(
+                        zone = %self.zone_id,
+                        version,
+                        shards = state.shard_to_bridges.len(),
+                        "updated zone shard topology"
+                    );
                 }
+
                 Err(e) => {
-                    warn!(error=%e, "failed to fetch zone shards, keeping old");
+                    warn!(
+                        zone = %self.zone_id,
+                        error = %e,
+                        "failed to fetch zone shards, keeping old state"
+                    );
                 }
             }
         }
 
-        // Extract shard IDs from manifest
-        let shard_keys: HashSet<String> = manifest
-            .versions
-            .keys()
-            .filter(|k| k.starts_with("shards/"))
-            .filter_map(|k| k.split('/').nth(1))
-            .map(|s| s.to_string())
-            .collect();
+        // -----------------------------------------------------------------------
+        // The current shard topology is authoritative for which shards belong
+        // to this zone.
+        // -----------------------------------------------------------------------
 
-        // Fetch segments for each shard
-        for shard_id in &shard_keys {
+        let local_shards: Vec<String> = state.shard_to_bridges.keys().cloned().collect();
+
+        // -----------------------------------------------------------------------
+        // Synchronize changed segment mappings for local shards.
+        // -----------------------------------------------------------------------
+
+        for shard_id in local_shards {
             let segments_key = format!("shards/{}/segments", shard_id);
-            if changed.contains(&segments_key) {
-                match self.fetch_shard_segments(shard_id).await {
-                    Ok((version, zone, segments)) => {
-                        if zone != self.zone_id {
-                            // Not our zone, skip
-                            continue;
-                        }
-                        for seg in segments {
-                            state.set_segment_shard(seg, shard_id.clone());
-                        }
-                        self.update_local_version(&segments_key, version).await;
-                        debug!(shard = %shard_id, "updated shard segments");
+
+            if !changed.contains(&segments_key) {
+                continue;
+            }
+
+            match self.fetch_shard_segments(&shard_id).await {
+                Ok((version, zone, segments)) => {
+                    // A shard must never be installed into the wrong zone.
+                    if zone != self.zone_id {
+                        warn!(
+                            shard = %shard_id,
+                            expected_zone = %self.zone_id,
+                            actual_zone = %zone,
+                            "shard returned by RzID belongs to another zone"
+                        );
+
+                        continue;
                     }
-                    Err(e) => {
-                        warn!(%shard_id, error=%e, "failed to fetch shard segments, keeping old");
-                    }
+
+                    // RzID response is authoritative for this shard.
+                    //
+                    // This removes deleted segments and handles reassignment.
+                    state.replace_shard_segments(&shard_id, segments);
+
+                    self.update_local_version(&segments_key, version).await;
+
+                    debug!(
+                        shard = %shard_id,
+                        version,
+                        "updated shard segments"
+                    );
+                }
+
+                Err(e) => {
+                    warn!(
+                        shard = %shard_id,
+                        error = %e,
+                        "failed to fetch shard segments, keeping old state"
+                    );
                 }
             }
         }
+
+        // -----------------------------------------------------------------------
+        // Final consistency pass.
+        //
+        // A segment is routable only if its shard exists and has bridge state.
+        // -----------------------------------------------------------------------
+
+        let valid_shards: HashSet<String> = state.shard_to_bridges.keys().cloned().collect();
+
+        state.retain_valid_shards(&valid_shards);
 
         if state.is_empty() {
             return Err(RZError::NoRoute("empty zone state after sync".into()));
         }
 
         Ok(Some(RoutingSnapshot::Zone(state)))
+    }
+
+    pub async fn fetch_codecs(&self) -> Result<CodecsResponse, RZError> {
+        let url = format!("{}/codecs", self.base_url);
+
+        let resp: CodecsResponse = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| RZError::Http(format!("codecs: {e}")))?
+            .error_for_status()
+            .map_err(|e| RZError::Http(format!("codecs: {e}")))?
+            .json()
+            .await
+            .map_err(|e| RZError::Http(format!("codecs json: {e}")))?;
+
+        Ok(resp)
     }
 }

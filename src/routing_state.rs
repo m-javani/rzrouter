@@ -2,8 +2,6 @@ use std::collections::{HashMap, HashSet};
 
 use crate::protocol::serialize_get_segments;
 
-const CODEC_SEGMENT: &str = "__codecs__";
-
 /// Edge Router State
 ///
 /// segment → zone → [router IDs]
@@ -26,30 +24,43 @@ impl EdgeState {
         self.segment_to_zone.insert(segment, zone_id);
     }
 
+    /// Replace the complete segment list for a zone.
+    ///
+    /// The supplied list is authoritative. Any segment previously assigned
+    /// to this zone but missing from `segments` is removed.
+    ///
+    /// We also remove an existing mapping before inserting each segment so
+    /// that segment reassignment between zones is handled correctly.
+    pub fn replace_zone_segments(&mut self, zone_id: &str, segments: Vec<String>) {
+        // Remove segments that used to belong to this zone but no longer do.
+        self.segment_to_zone
+            .retain(|_, existing_zone| existing_zone != zone_id);
+
+        // Install the authoritative assignments.
+        for segment in segments {
+            self.segment_to_zone.remove(&segment);
+            self.segment_to_zone.insert(segment, zone_id.to_string());
+        }
+    }
+
+    /// Remove all state associated with zones that no longer exist.
     pub fn retain_valid_zones(&mut self, valid_zones: &HashSet<String>) {
-        self.zone_to_routers.retain(|z, _| valid_zones.contains(z));
-        self.segment_to_zone.retain(|_, z| valid_zones.contains(z));
+        self.zone_to_routers
+            .retain(|zone, _| valid_zones.contains(zone));
+
+        self.segment_to_zone
+            .retain(|_, zone| valid_zones.contains(zone));
     }
 
     /// Hot path: segment → zone → routers
     pub fn lookup(&self, segment: &str) -> &[String] {
-        // Special handling for global requests - pick random segment
-        let lookup_segment = if segment == CODEC_SEGMENT {
-            if self.segment_to_zone.is_empty() {
-                return &[];
-            }
-            let idx = fastrand::usize(0..self.segment_to_zone.len());
-            self.segment_to_zone.keys().nth(idx).unwrap()
-        } else {
-            segment
-        };
-
-        match self.segment_to_zone.get(lookup_segment) {
+        match self.segment_to_zone.get(segment) {
             Some(zone) => self
                 .zone_to_routers
                 .get(zone)
-                .map(|v| v.as_slice())
+                .map(|routers| routers.as_slice())
                 .unwrap_or(&[]),
+
             None => &[],
         }
     }
@@ -81,23 +92,40 @@ impl ZoneState {
         self.segment_to_shard.insert(segment, shard_id);
     }
 
+    /// Replace the complete segment list for a shard.
+    ///
+    /// The supplied list is authoritative. Any segment previously assigned
+    /// to this shard but missing from `segments` is removed.
+    ///
+    /// We also remove an existing mapping before inserting each segment so
+    /// that segment reassignment between shards is handled correctly.
+    pub fn replace_shard_segments(&mut self, shard_id: &str, segments: Vec<String>) {
+        // Remove segments that used to belong to this shard but no longer do.
+        self.segment_to_shard
+            .retain(|_, existing_shard| existing_shard != shard_id);
+
+        // Install the authoritative assignments.
+        for segment in segments {
+            self.segment_to_shard.remove(&segment);
+            self.segment_to_shard.insert(segment, shard_id.to_string());
+        }
+    }
+
+    /// Remove all segment mappings whose shard no longer exists.
+    pub fn retain_valid_shards(&mut self, valid_shards: &HashSet<String>) {
+        self.segment_to_shard
+            .retain(|_, shard| valid_shards.contains(shard));
+    }
+
     /// Hot path: segment → shard → bridges
     pub fn lookup(&self, segment: &str) -> &[String] {
-        let lookup_segment = if segment == CODEC_SEGMENT {
-            if self.segment_to_shard.is_empty() {
-                return &[];
-            }
-            let idx = fastrand::usize(0..self.segment_to_shard.len());
-            self.segment_to_shard.keys().nth(idx).unwrap()
-        } else {
-            segment
-        };
-        match self.segment_to_shard.get(lookup_segment) {
+        match self.segment_to_shard.get(segment) {
             Some(shard) => self
                 .shard_to_bridges
                 .get(shard)
-                .map(|v| v.as_slice())
+                .map(|bridges| bridges.as_slice())
                 .unwrap_or(&[]),
+
             None => &[],
         }
     }
@@ -115,7 +143,7 @@ pub enum RoutingSnapshot {
 }
 
 impl RoutingSnapshot {
-    /// Hot path: get next hop IDs for a segment
+    /// Hot path: get next hop IDs for a segment.
     pub fn lookup(&self, segment: &str) -> &[String] {
         match self {
             RoutingSnapshot::Edge(state) => state.lookup(segment),
@@ -123,12 +151,13 @@ impl RoutingSnapshot {
         }
     }
 
-    /// Serialize all segments with count 0 using the protocol format
+    /// Serialize all segments with count 0 using the protocol format.
     pub fn serialize_segments(&self, clrid: u32) -> Vec<u8> {
         let segments = match self {
             RoutingSnapshot::Edge(state) => state.segment_to_zone.keys(),
             RoutingSnapshot::Zone(state) => state.segment_to_shard.keys(),
         };
+
         serialize_get_segments(segments, clrid)
     }
 
@@ -140,23 +169,20 @@ impl RoutingSnapshot {
         matches!(self, RoutingSnapshot::Zone(_))
     }
 
-    /// Get all hop IDs in this snapshot (for reconciliation)
+    /// Get all hop IDs in this snapshot (for reconciliation).
     pub fn get_all_hop_ids(&self) -> Vec<String> {
         match self {
-            RoutingSnapshot::Edge(state) => {
-                let mut ids = Vec::new();
-                for routers in state.zone_to_routers.values() {
-                    ids.extend(routers.iter().cloned());
-                }
-                ids
-            }
-            RoutingSnapshot::Zone(state) => {
-                let mut ids = Vec::new();
-                for bridges in state.shard_to_bridges.values() {
-                    ids.extend(bridges.iter().cloned());
-                }
-                ids
-            }
+            RoutingSnapshot::Edge(state) => state
+                .zone_to_routers
+                .values()
+                .flat_map(|routers| routers.iter().cloned())
+                .collect(),
+
+            RoutingSnapshot::Zone(state) => state
+                .shard_to_bridges
+                .values()
+                .flat_map(|bridges| bridges.iter().cloned())
+                .collect(),
         }
     }
 }

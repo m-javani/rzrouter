@@ -7,7 +7,16 @@ use tracing::Level;
 use tracing_subscriber::fmt::time::UtcTime;
 
 use rzrouter::{
-    api::run_api_server, config::{Config, RouterMode}, error::RZError, forwarder::Forwarder, hop_manager::HopManager, metrics::Metrics, resolver::RzPointResolver, routing_state::{EdgeState, RoutingSnapshot, ZoneState}, rzid::RzidClient, tcp_server::TcpServer,
+    api::run_api_server,
+    config::{Config, RouterMode},
+    error::RZError,
+    forwarder::Forwarder,
+    hop_manager::HopManager,
+    metrics::Metrics,
+    resolver::RzPointResolver,
+    routing_state::{EdgeState, RoutingSnapshot, ZoneState},
+    rzid::RzidClient,
+    tcp_server::TcpServer,
 };
 
 fn main() -> Result<(), RZError> {
@@ -99,7 +108,12 @@ async fn async_main(config: Config) -> Result<(), RZError> {
     });
 
     // --- Forwarder --------------------------------------------------------
-    let forwarder = Arc::new(Forwarder::new(routing_state.clone(), hop_manager.clone()));
+    let codecs = rzid.fetch_codecs().await?;
+    let forwarder = Arc::new(Forwarder::new(
+        routing_state.clone(),
+        hop_manager.clone(),
+        codecs.rate_features,
+    ));
 
     // --- TCP Server -------------------------------------------------------
     let listen_addr = config.listen_addr();

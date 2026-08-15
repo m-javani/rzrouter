@@ -7,34 +7,35 @@ use tracing::debug;
 
 use crate::error::{ForwardError, RZError};
 use crate::hop_manager::HopManager;
+use crate::protocol::serialize_codecs;
 use crate::routing_state::RoutingSnapshot;
 
 const GETSEGMENTS: &str = "GETSEGMENTS";
+const GETCODECS: &str = "__codecs__";
 
 /// The forwarder handles the hot path: route → hop → connection → send → response.
 pub struct Forwarder {
     routing: Arc<ArcSwap<RoutingSnapshot>>,
     hops: Arc<HopManager>,
     max_retries: usize,
+    codecs: Vec<String>,
 }
 
 impl Forwarder {
-    pub fn new(routing: Arc<ArcSwap<RoutingSnapshot>>, hops: Arc<HopManager>) -> Self {
+    pub fn new(
+        routing: Arc<ArcSwap<RoutingSnapshot>>,
+        hops: Arc<HopManager>,
+        codecs: Vec<String>,
+    ) -> Self {
         Self {
             routing,
             hops,
             max_retries: 3,
+            codecs,
         }
     }
 
     /// Forward a frame to the appropriate hop.
-    ///
-    /// Returns:
-    /// - Ok(Bytes) → Response to send back to client
-    /// - Err(ForwardError::UnknownSegment) → Send error response to client
-    /// - Err(ForwardError::NetworkError) → Send error response to client
-    /// - Err(ForwardError::Timeout) → Drop, client will timeout
-    /// - Err(ForwardError::Internal) → Drop, client will timeout
     pub async fn forward(
         &self,
         mut frame: BytesMut,
@@ -47,6 +48,13 @@ impl Forwarder {
             let snapshot = self.routing.load();
             let response = snapshot.serialize_segments(original_clrid);
             return Ok(Bytes::from(response));
+        }
+        if segment == GETCODECS {
+            let rate_features_str = self.codecs.join(",");
+            let bytes = rate_features_str.into_bytes();
+            // serialize response
+            let serialized = serialize_codecs(original_clrid, &bytes);
+            return Ok(Bytes::from(serialized));
         }
 
         let mut request_sent = false;
