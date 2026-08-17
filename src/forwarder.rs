@@ -127,15 +127,18 @@ impl Forwarder {
 
                 match send_result {
                     Ok(response) => {
+                        tracing::info!(
+                            "Forwarder received {} bytes, first byte: 0x{:02X}",
+                            response.len(),
+                            response[0]
+                        );
                         // Success! Restore original CLRID in-place
-                        if response.len() >= clrid_offset + 4 {
-                            let mut bytes = response.to_vec();
-                            bytes[clrid_offset..clrid_offset + 4]
-                                .copy_from_slice(&original_clrid.to_le_bytes());
-                            return Ok(Bytes::from(bytes));
-                        } else {
-                            return Ok(response);
+                        if response.len() >= 9 {
+                            let mut bytes = BytesMut::from(response.as_ref());
+                            bytes[1..5].copy_from_slice(&original_clrid.to_le_bytes());
+                            return Ok(bytes.freeze());
                         }
+                        return Ok(response);
                     }
                     Err(e) => match &e {
                         RZError::ConnectionClosed => {

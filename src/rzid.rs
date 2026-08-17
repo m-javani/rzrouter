@@ -261,6 +261,7 @@ impl RzidClient {
         hop_manager: &HopManager,
     ) -> Result<Option<RoutingSnapshot>, RZError> {
         let manifest = self.fetch_version_manifest().await?;
+        debug!("routing manifest: {:?}", manifest);
 
         let changed_keys = self.detect_changes(&manifest).await;
 
@@ -310,9 +311,8 @@ impl RzidClient {
                 }
 
                 RouterMode::Zone => {
-                    let own_shards_key = format!("zones/{}/shards", self.zone_id);
-
-                    *key == &own_shards_key
+                    key.starts_with("zones/") && key.contains(&self.zone_id)
+                        || key.starts_with("shards/") && key.ends_with("/segments")
                 }
             })
             .filter_map(|(key, version)| {
