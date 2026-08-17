@@ -15,11 +15,11 @@ pub struct TestHelper {
 }
 
 impl TestHelper {
-    pub async fn new() -> Self {
+    pub async fn new(mode: &str) -> Self {
         // Setup test logging
         init_logging(Level::DEBUG);
 
-        let config = Self::test_config();
+        let config = Self::test_config(mode);
         let router_addr = config.listen_addr();
 
         let shutdown = CancellationToken::new();
@@ -48,14 +48,14 @@ impl TestHelper {
         }
     }
 
-    fn test_config() -> Config {
+    fn test_config(mode: &str) -> Config {
         use clap::Parser;
 
         // Build config with test values
         let args = vec![
             "rzrouter",
             "--mode",
-            "zone",
+            mode,
             "--zone-id",
             "zone1",
             "--router-id",

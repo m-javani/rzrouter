@@ -6,7 +6,8 @@ mod common;
 
 #[tokio::test]
 async fn test_get_prop_room_day() {
-    let helper = TestHelper::new().await;
+    let mode = "edge"; // or "zone"
+    let helper = TestHelper::new(mode).await;
 
     tokio::time::sleep(time::Duration::from_secs(1)).await;
 
