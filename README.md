@@ -1,6 +1,6 @@
 # RzRouter
 
-A purpose-built TCP router for the Roomzin platform. It routes client requests from SDKs and HTTP proxies to the correct Roomzin shards based on the request's segment (city or property group), without clients needing to know where data is physically located.
+A purpose-built TCP router for the [Roomzin platform](https://m-javani.github.io/roomzin-doc/). It routes client requests from SDKs and HTTP proxies to the correct Roomzin shards based on the request's segment (city or property group), without clients needing to know where data is physically located.
 
 ## What It Does
 
@@ -154,3 +154,37 @@ Routers expose:
 - **Metrics**: Prometheus metrics available at `/metrics` endpoint (if enabled)
 - **Health**: `/health` endpoint for readiness/liveness probes
 
+
+---
+
+## Contributing
+
+Contributions are welcome!
+
+Please open an issue before proposing large changes. All contributions are subject to the BUSL-1.1 License terms.
+
+---
+
+## License
+
+This project is licensed under the [BUSL-1.1 License](LICENSE).
+
+**Note:** RzProxy is designed to communicate with Roomzin Server, which requires a valid Roomzin license.
+
+---
+
+## Support
+
+- **Community Q&A**: [GitHub Discussions](https://github.com/m-javani/roomzin-doc/discussions)
+- **Issues**: [GitHub Issues](https://github.com/m-javani/rzproxy/issues)
+
+---
+
+## Related Repositories
+
+- [Roomzin](https://m-javani.github.io/roomzin-doc/) - Roomzin Documents
+- [RzRouter](https://github.com/m-javani/rzrouter) - Routing fabric
+- [RzID](https://github.com/m-javani/rzid) - Roomzin Service Registry
+- [RzProxy](https://github.com/m-javani/rzproxy) - HTTP/JSON proxy
+- [Roomzin Quickstart](https://github.com/m-javani/roomzin-quickstart) — Local Docker cluster
+- [Roomzin Bench](https://github.com/m-javani/roomzin-bench) — Benchmarking tool
