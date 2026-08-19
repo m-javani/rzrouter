@@ -17,10 +17,10 @@ This two-tier design enables global deployments with shards distributed across z
 Client SDK ──┐
              │
 HTTP Proxy ──┼──► Edge Router ──► Zone Router ──► Bridge ──► Shard
-             │        │               │              │
-Other SDKs ──┘        │               │              │
-                      ▼               ▼              ▼
-                    RzID ◄────────────┴──────────────┘
+             │        │               │              │         │
+Other SDKs ──┘        │               │              │         │
+                      ▼               ▼              ▼         ▼
+                    RzID ◄────────────┴────────────────────────┘
                     (Service Registry)
 ```
 
@@ -150,7 +150,6 @@ Routers discover the topology by polling RzID for updates.
 
 Routers expose:
 
-- **Logs**: Structured JSON logs via `RUST_LOG` environment variable
 - **Metrics**: Prometheus metrics available at `/metrics` endpoint (if enabled)
 - **Health**: `/health` endpoint for readiness/liveness probes
 
