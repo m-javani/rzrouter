@@ -14,13 +14,13 @@ This two-tier design enables global deployments with shards distributed across z
 ## How It Fits in Roomzin
 
 ```
-Client SDK ──┐
-             │
-HTTP Proxy ──┼──► Edge Router ──► Zone Router ──► Bridge ──► Shard
-             │        │               │              │         │
-Other SDKs ──┘        │               │              │         │
-                      ▼               ▼              ▼         ▼
-                    RzID ◄────────────┴────────────────────────┘
+Client SDK ───┐
+              │
+HTTP Proxy ───┼───► Edge Router ───► Zone Router ───► Bridge ───► Shard
+              │        │               │              │         │
+Other SDKs ───┘        │               │              │         │
+                       ▼               ▼              ▼         ▼
+                    RzID ◄─────────────┴──────────────┴─────────┘
                     (Service Registry)
 ```
 
@@ -89,6 +89,58 @@ Translates component IDs (router IDs, bridge IDs) to actual hostnames. Decouples
 - For zone mode: `zone_id` and `router_id` must be registered with RzID
 
 
+### Command Line Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--mode` | `edge` | Router mode: `edge` or `zone` |
+| `--listen-host` | `0.0.0.0` | TCP listen host |
+| `--tcp-port` | `9000` | TCP port to listen on |
+| `--api-listening-addr` | `0.0.0.0` | HTTP API listen host |
+| `--api-port` | `9100` | HTTP API port |
+| `--rzid-addr` | (required) | RzID service address (e.g., `localhost:8080`) |
+| `--rzpoint-addr` | (required) | RzPoint resolver address (e.g., `localhost:8081`) |
+| `--zone-id` | (required for zone) | Zone ID |
+| `--router-id` | (required for zone) | Router ID |
+| `--max-connections` | `10000` | Maximum concurrent TCP connections |
+| `--conn-per-hop` | `4` | Number of connections per hop |
+| `--hop-tcp-port` | `9000` | Hop TCP port |
+| `--refresh-interval-secs` | `10` | RzID refresh interval in seconds |
+| `--heartbeat-interval-secs` | `30` | Heartbeat interval in seconds |
+| `--request-timeout-secs` | `30` | Request timeout in seconds |
+| `--worker-threads` | `4` | Number of worker threads |
+| `--app-keepalive-secs` | `15` | Application-level keepalive interval |
+| `--frame-timeout-secs` | `20` | Max time for a complete frame |
+| `--idle-timeout-secs` | `90` | Absolute idle timeout |
+| `--max-buffer-size` | `262144` | Max receive buffer per connection (bytes) |
+| `--max-frame-size` | `16384` | Max single frame size (bytes) |
+
+### Example Usage
+
+**Edge Router:**
+```bash
+rzrouter \
+  --mode edge \
+  --listen-host 0.0.0.0 \
+  --tcp-port 9000 \
+  --api-port 9100 \
+  --rzid-addr rzid.internal:8080 \
+  --rzpoint-addr rzpoint.internal:8081 
+```
+
+**Zone Router:**
+```bash
+rzrouter \
+  --mode zone \
+  --zone-id zone-us-east \
+  --router-id router-zone-us-east-01 \
+  --listen-host 0.0.0.0 \
+  --tcp-port 9000 \
+  --api-port 9100 \
+  --rzid-addr rzid.internal:8080 \
+  --rzpoint-addr rzpoint.internal:8081 
+```
+
 ## Deployment
 
 ### Edge Routers
@@ -113,46 +165,68 @@ Routers discover the topology by polling RzID for updates.
 ## Network Topology
 
 ```
-                   ┌─────────────────────────────────────────────┐
-                   │              Global Load Balancer          │
-                   └─────────────────┬───────────────────────────┘
+                   ┌─────────────────────────────────────────┐
+                   │         Global Load Balancer           │
+                   └─────────────────┬───────────────────────┘
                                      │
                     ┌────────────────┼────────────────┐
                     │                │                │
                     ▼                ▼                ▼
-              ┌──────────┐    ┌──────────┐    ┌──────────┐
-              │ Edge     │    │ Edge     │    │ Edge     │
-              │ Router   │    │ Router   │    │ Router   │
-              └────┬─────┘    └────┬─────┘    └────┬─────┘
-                   │               │               │
-         ┌─────────┼───────────────┼───────────────┼─────────┐
-         │         │               │               │         │
-         ▼         ▼               ▼               ▼         ▼
-    ┌────────┐ ┌────────┐    ┌────────┐    ┌────────┐ ┌────────┐
-    │ Zone   │ │ Zone   │    │ Zone   │    │ Zone   │ │ Zone   │
-    │ Router │ │ Router │    │ Router │    │ Router │ │ Router │
-    └───┬────┘ └───┬────┘    └───┬────┘    └───┬────┘ └───┬────┘
-        │          │              │              │          │
-        ▼          ▼              ▼              ▼          ▼
-    ┌────────┐ ┌────────┐    ┌────────┐    ┌────────┐ ┌────────┐
-    │ Bridge │ │ Bridge │    │ Bridge │    │ Bridge │ │ Bridge │
-    └───┬────┘ └───┬────┘    └───┬────┘    └───┬────┘ └───┬────┘
-        │          │              │              │          │
-        └──────────┴──────────────┴──────────────┴──────────┘
-                                     │
-                                     ▼
-                              ┌─────────────┐
-                              │   Shards    │
-                              └─────────────┘
+              ┌───────────┐    ┌───────────┐    ┌───────────┐
+              │ Edge      │    │ Edge      │    │ Edge      │
+              │ Router    │    │ Router    │    │ Router    │
+              └─────┬─────┘    └─────┬─────┘    └─────┬─────┘
+                    │               │               │
+         ┌──────────┼───────────────┼───────────────┼──────────┐
+         │          │               │               │          │
+         ▼          ▼               ▼               ▼          ▼
+    ┌─────────┐ ┌─────────┐    ┌─────────┐    ┌─────────┐ ┌─────────┐
+    │ Zone    │ │ Zone    │    │ Zone    │    │ Zone    │ │ Zone    │
+    │ Router  │ │ Router  │    │ Router  │    │ Router  │ │ Router  │
+    └────┬────┘ └────┬────┘    └────┬────┘    └────┬────┘ └────┬────┘
+         │           │              │              │           │
+         ▼           ▼              ▼              ▼           ▼
+    ┌─────────┐ ┌─────────┐    ┌─────────┐    ┌─────────┐ ┌─────────┐
+    │ Bridge  │ │ Bridge  │    │ Bridge  │    │ Bridge  │ │ Bridge  │
+    └────┬────┘ └────┬────┘    └────┬────┘    └────┬────┘ └────┬────┘
+         │           │              │              │           │
+         └───────────┴──────────────┼──────────────┴───────────┘
+                                    │
+                                    ▼
+                             ┌───────────────┐
+                             │   Shards      │
+                             └───────────────┘
 ```
 
 ## Monitoring
 
-Routers expose:
+### Health Check
 
-- **Metrics**: Prometheus metrics available at `/metrics` endpoint (if enabled)
-- **Health**: `/health` endpoint for readiness/liveness probes
+```
+GET /health
+Response: 200 OK
+```
 
+### Metrics
+
+Routers expose Prometheus metrics at `/metrics` endpoint (port configured via `--api-port`).
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `router_connections_opened_total` | Counter | Total connections opened |
+| `router_connections_closed_total` | Counter | Total connections closed |
+| `router_frames_received_total` | Counter | Total frames received |
+| `router_frames_forwarded_total` | Counter | Total frames forwarded |
+| `router_bytes_received_total` | Counter | Total bytes received |
+| `router_bytes_sent_total` | Counter | Total bytes sent |
+| `router_client_errors_total` | Counter | Client-side errors |
+| `router_unknown_segment_total` | Counter | Unknown segment errors |
+| `router_network_errors_total` | Counter | Network-related errors |
+| `router_timeouts_total` | Counter | Timeout events |
+| `router_internal_errors_total` | Counter | Internal server errors |
+| `router_keepalives_sent_total` | Counter | Keepalive messages sent |
+| `router_keepalives_received_total` | Counter | Keepalive messages received |
+| `router_resyncs_total` | Counter | Resynchronization events |
 
 ---
 
